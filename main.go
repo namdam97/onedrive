@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -41,7 +43,7 @@ func main() {
 		uploadFile(accessToken)
 		fmt.Fprintln(w, "File uploaded successfully.")
 		// fileId := getInfoFileId(accessToken)
-		getInfoFile(accessToken)
+		// getInfoFile(accessToken)
 	})
 
 	// Khởi động HTTP server
@@ -57,39 +59,61 @@ func main() {
 // me/drive/root:/testhodo/test2.txt:/content
 func uploadFile(accessToken string) {
 	// Tạo yêu cầu HTTP để tải tệp lên OneDrive
-	url := "https://graph.microsoft.com/v1.0/me/drive/root:/testhodo/test2.txt:/content"
-	filePath := "testhodo/test2.txt"
+	uploadURL := "https://graph.microsoft.com/v1.0/me/drive/root:/testhodo/hung.pptx:/content"
+	filePath := "testhodo/hung.pptx"
 	file, err := os.Open(filePath)
 	if err != nil {
 		log.Fatalf("Failed to open file: %v", err)
 	}
 	defer file.Close()
 
-	req, err := http.NewRequest("PUT", url, file)
+	// Kích thước phần nhỏ (ví dụ: 1 MB)
+	chunkSize := 1024 * 1024
+
+	// Tạo yêu cầu HTTP PUT để tải lên tệp
+	req, err := http.NewRequest("PUT", uploadURL, nil)
 	if err != nil {
-		log.Fatalf("Failed to create HTTP request: %v", err)
+		fmt.Println("Failed to create HTTP request:", err)
+		return
 	}
-	// req, err := http.NewRequest("PUT", url, nil)
-	// if err != nil {
-	// 	log.Fatalf("Failed to create HTTP request: %v", err)
-	// }
-	req.Header.Add("Content-Type", "text/plain")
 	req.Header.Add("Authorization", "Bearer "+accessToken)
 
 	// Sử dụng HTTP client để gửi yêu cầu
 	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Fatalf("Failed to upload file: %v", err)
-	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusOK {
-		fmt.Println("File uploaded successfully.")
-	} else {
-		fmt.Printf("Failed to upload file. Status code: %d\n", resp.StatusCode)
+	// Đọc và gửi từng phần của tệp
+	buffer := make([]byte, chunkSize)
+	for {
+		n, err := file.Read(buffer)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Println("Failed to read file:", err)
+			return
+		}
+
+		// Tạo io.Reader từ mảng byte và giới hạn kích thước
+		reader := io.LimitReader(bytes.NewReader(buffer[:n]), int64(n))
+
+		// Gửi phần nhỏ lên OneDrive
+		req.Body = ioutil.NopCloser(reader)
+		req.ContentLength = int64(n)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Println("Failed to upload file:", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			fmt.Printf("Failed to upload file. Status code: %d\n", resp.StatusCode)
+			return
+		}
 	}
-	return
+
+	fmt.Println("File uploaded successfully.")
 }
 
 func getInfoFile(accessToken string) {
