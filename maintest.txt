@@ -1,0 +1,30 @@
+package main
+
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+)
+
+func main() {
+	// Đường dẫn của tệp cần đọc
+	filePath := "test.txt"
+
+	// Mở tệp để đọc
+	file, err := os.Open(filePath)
+	if err != nil {
+		fmt.Println("Lỗi khi mở tệp:", err)
+		return
+	}
+	defer file.Close()
+
+	// Đọc nội dung của tệp
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		fmt.Println("Lỗi khi đọc tệp:", err)
+		return
+	}
+
+	// In nội dung tệp ra màn hình
+	fmt.Println(string(content))
+}
