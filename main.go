@@ -35,6 +35,10 @@ var (
 	handler *multipart.FileHeader
 )
 
+type respInfoFile struct {
+	Id string `json:"id"`
+}
+
 func startOAuthFlow() {
 	// Tạo URL xác thực và chuyển hướng người dùng đến trang đăng nhập
 	authURL := config.AuthCodeURL("", oauth2.AccessTypeOffline)
@@ -204,11 +208,61 @@ func getInfoFile(accessToken string) {
 		// Trích xuất itemId
 		webUrlValue, ok := webUrl["webUrl"].(string)
 		if !ok {
-			fmt.Printf("Item ID not found in response.")
+			fmt.Printf("webUrl not found in response.")
 		} else {
 			fmt.Printf("webUrl : %v\n", webUrlValue)
 		}
+
+		var dataId respInfoFile
+		json.Unmarshal(body, &dataId)
+		createLink(dataId.Id, accessToken)
+
 	} else {
 		fmt.Printf("Failed to get file. Status code: %d\n", resp.StatusCode)
+	}
+}
+
+func createLink(itemId, accessToken string) {
+	// Tạo yêu cầu HTTP để tạo liên kết chia sẻ cho tệp vừa tải lên
+	createLinkURL := "https://graph.microsoft.com/v1.0/me/drive/items/" + itemId + "/createLink"
+	createLinkReq, err := http.NewRequest("POST", createLinkURL, nil)
+	if err != nil {
+		fmt.Println("Failed to create HTTP request:", err)
+		return
+	}
+	createLinkReq.Header.Add("Authorization", "Bearer "+accessToken)
+
+	// Sử dụng HTTP client để gửi yêu cầu
+	createLinkClient := &http.Client{}
+	createLinkResp, err := createLinkClient.Do(createLinkReq)
+	if err != nil {
+		fmt.Println("Failed to create link:", err)
+		return
+	}
+	defer createLinkResp.Body.Close()
+
+	if createLinkResp.StatusCode == http.StatusOK {
+		// Đọc phản hồi JSON từ OneDrive
+		createLinkBody, err := ioutil.ReadAll(createLinkResp.Body)
+		if err != nil {
+			fmt.Println("Failed to read response body:", err)
+			return
+		}
+
+		// Phân tích phản hồi JSON để lấy URL chia sẻ
+		var createLinkData map[string]interface{}
+		if err := json.Unmarshal(createLinkBody, &createLinkData); err != nil {
+			fmt.Println("Failed to parse JSON response:", err)
+			return
+		}
+
+		// Trích xuất URL chia sẻ
+		if shareLink, ok := createLinkData["link"].(string); ok {
+			fmt.Println("Share URL:", shareLink)
+		} else {
+			fmt.Println("Share URL not found in response.")
+		}
+	} else {
+		fmt.Printf("Failed to create share link. Status code: %d\n", createLinkResp.StatusCode)
 	}
 }
