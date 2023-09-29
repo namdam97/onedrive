@@ -3,13 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
+	"github.com/skratchdot/open-golang/open"
 	"golang.org/x/oauth2"
 )
 
@@ -42,8 +45,7 @@ func main() {
 		accessToken := token.AccessToken
 		uploadFile(accessToken)
 		fmt.Fprintln(w, "File uploaded successfully.")
-		// fileId := getInfoFileId(accessToken)
-		// getInfoFile(accessToken)
+		getInfoFile(accessToken)
 	})
 
 	// Khởi động HTTP server
@@ -52,6 +54,17 @@ func main() {
 	// Tạo URL xác thực và chuyển hướng người dùng đến trang đăng nhập
 	authURL := config.AuthCodeURL("", oauth2.AccessTypeOffline)
 	fmt.Printf("Go to the following link in your browser:\n%v\n", authURL)
+	// Mở trình duyệt tự động với URL xác thực
+	if err := open.Run(authURL); err != nil {
+		log.Fatalf("Failed to open browser: %v", err)
+	}
+
+	// Đợi cho phép người dùng đăng nhập
+	fmt.Println("Waiting for authorization...")
+
+	time.Sleep(1 * time.Second)
+
+	fmt.Println("Authorization process complete.")
 	select {}
 }
 
@@ -118,7 +131,7 @@ func uploadFile(accessToken string) {
 
 func getInfoFile(accessToken string) {
 	// Tạo yêu cầu HTTP để tải tệp lên OneDrive
-	url := "https://graph.microsoft.com/v1.0/me/drive/root:/testhodo/test2.txt"
+	url := "https://graph.microsoft.com/v1.0/me/drive/root:/testhodo/hung.pptx"
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -138,8 +151,20 @@ func getInfoFile(accessToken string) {
 	if resp.StatusCode == http.StatusOK {
 		body, _ := ioutil.ReadAll(resp.Body)
 		fmt.Println(string(body))
+		// Phân tích phản hồi JSON để lấy itemId
+		var webUrl map[string]interface{}
+		if err := json.Unmarshal(body, &webUrl); err != nil {
+			fmt.Printf("Failed to parse JSON response: %v", err)
+		}
+
+		// Trích xuất itemId
+		webUrlValue, ok := webUrl["webUrl"].(string)
+		if !ok {
+			fmt.Printf("Item ID not found in response.")
+		} else {
+			fmt.Printf("webUrl : %v\n", webUrlValue)
+		}
 	} else {
 		fmt.Printf("Failed to get file. Status code: %d\n", resp.StatusCode)
 	}
-	return
 }
