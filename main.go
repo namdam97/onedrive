@@ -39,6 +39,19 @@ type respInfoFile struct {
 	Id string `json:"id"`
 }
 
+type ShareLinkRequest struct {
+	Type  string `json:"type"`
+	Scope string `json:"scope"`
+}
+
+type ShareLinkResponse struct {
+	Link WebUrl `json:"link"`
+}
+
+type WebUrl struct {
+	WebUrl string `json:"webUrl"`
+}
+
 func startOAuthFlow() {
 	// Tạo URL xác thực và chuyển hướng người dùng đến trang đăng nhập
 	authURL := config.AuthCodeURL("", oauth2.AccessTypeOffline)
@@ -223,46 +236,31 @@ func getInfoFile(accessToken string) {
 }
 
 func createLink(itemId, accessToken string) {
-	// Tạo yêu cầu HTTP để tạo liên kết chia sẻ cho tệp vừa tải lên
-	createLinkURL := "https://graph.microsoft.com/v1.0/me/drive/items/" + itemId + "/createLink"
-	createLinkReq, err := http.NewRequest("POST", createLinkURL, nil)
-	if err != nil {
-		fmt.Println("Failed to create HTTP request:", err)
-		return
+	// Tạo yêu cầu HTTP để tải tệp lên OneDrive
+	urlLink := "https://graph.microsoft.com/v1.0/me/drive/items/" + itemId + "/createLink"
+	shareLinkReq := ShareLinkRequest{
+		Type:  "embed", // Loại liên kết (ví dụ: xem, chỉnh sửa, v.v.)
+		Scope: "anonymous",
 	}
-	createLinkReq.Header.Add("Authorization", "Bearer "+accessToken)
+	jsonData, err := json.Marshal(shareLinkReq)
+	if err != nil {
+		log.Fatalf("Failed to marshal JSON: %v", err)
+	}
+	req, err := http.NewRequest("POST", urlLink, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Fatalf("Failed to get HTTP request: %v", err)
+	}
+	req.Header.Add("Authorization", "Bearer "+accessToken)
+	req.Header.Add("Content-Type", "application/json")
 
 	// Sử dụng HTTP client để gửi yêu cầu
-	createLinkClient := &http.Client{}
-	createLinkResp, err := createLinkClient.Do(createLinkReq)
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Failed to create link:", err)
-		return
+		log.Fatalf("Failed to get file: %v", err)
 	}
-	defer createLinkResp.Body.Close()
+	bodys, _ := ioutil.ReadAll(resp.Body)
 
-	if createLinkResp.StatusCode == http.StatusOK {
-		// Đọc phản hồi JSON từ OneDrive
-		createLinkBody, err := ioutil.ReadAll(createLinkResp.Body)
-		if err != nil {
-			fmt.Println("Failed to read response body:", err)
-			return
-		}
-
-		// Phân tích phản hồi JSON để lấy URL chia sẻ
-		var createLinkData map[string]interface{}
-		if err := json.Unmarshal(createLinkBody, &createLinkData); err != nil {
-			fmt.Println("Failed to parse JSON response:", err)
-			return
-		}
-
-		// Trích xuất URL chia sẻ
-		if shareLink, ok := createLinkData["link"].(string); ok {
-			fmt.Println("Share URL:", shareLink)
-		} else {
-			fmt.Println("Share URL not found in response.")
-		}
-	} else {
-		fmt.Printf("Failed to create share link. Status code: %d\n", createLinkResp.StatusCode)
-	}
+	// In liên kết chia sẻ
+	fmt.Println("Share Link:", string(bodys))
 }
