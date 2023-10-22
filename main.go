@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/skratchdot/open-golang/open"
@@ -30,7 +33,7 @@ var (
 			AuthURL:  "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
 			TokenURL: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
 		},
-		Scopes: []string{"files.readwrite.all"},
+		Scopes: []string{"files.readwrite.all", "offline_access"},
 	}
 	handler *multipart.FileHeader
 )
@@ -117,6 +120,12 @@ func main() {
 
 		// Sử dụng AccessToken để tải tệp lên OneDrive
 		accessToken := token.AccessToken
+		refreshToken := token.RefreshToken
+		tokenRefresh, err := refreshAccessToken(refreshToken)
+		if err != nil {
+			log.Println("err: ", err)
+		}
+		fmt.Printf("tokenRefresh: %s", tokenRefresh)
 		uploadFile(accessToken)
 		fmt.Fprintln(w, "File uploaded successfully.")
 		getInfoFile(accessToken)
@@ -263,4 +272,51 @@ func createLink(itemId, accessToken string) {
 
 	// In liên kết chia sẻ
 	fmt.Println("Share Link:", string(bodys))
+}
+
+func refreshAccessToken(refreshToken string) (string, error) {
+	// Tạo yêu cầu HTTP để làm mới AccessToken
+	data := url.Values{}
+	data.Set("grant_type", "refresh_token")
+	data.Set("refresh_token", refreshToken)
+	data.Set("client_id", "e240abd3-62fa-4378-ae24-9e92f078fc63")         // Thay thế bằng Client ID của bạn
+	data.Set("client_secret", "ZSs8Q~nT6zvm19CIE72shXSp-sHelDFYSsz43cBJ") // Thay thế bằng Client Secret của bạn
+	data.Set("scope", "offline_access files.readwrite.all")               // Đảm bảo phạm vi cần được yêu cầu
+
+	req, err := http.NewRequest("POST", "https://login.microsoftonline.com/common/oauth2/v2.0/token", strings.NewReader(data.Encode()))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+
+	client := http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Failed to refresh AccessToken. Status code: %d", resp.StatusCode)
+	}
+
+	// Đọc phản hồi
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	// Phân tích JSON phản hồi để lấy AccessToken mới
+	var tokenResponse map[string]interface{}
+	if err := json.Unmarshal(body, &tokenResponse); err != nil {
+		return "", err
+	}
+
+	accessToken, ok := tokenResponse["access_token"].(string)
+	if !ok {
+		return "", errors.New("Access token not found in response.")
+	}
+
+	return accessToken, nil
 }
