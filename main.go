@@ -20,20 +20,21 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// AuthURL:  "https://login.microsoftonline.com/f8cdef31-a31e-4b4a-93e4-5f571e91255a/oauth2/authorize",
-// TokenURL: "https://login.microsoftonline.com/f8cdef31-a31e-4b4a-93e4-5f571e91255a/oauth2/token",
-
 var (
+	clientId     = "e240abd3-62fa-4378-ae24-9e92f078fc63"
+	clientSecret = "ZSs8Q~nT6zvm19CIE72shXSp-sHelDFYSsz43cBJ"
+	redirectURL  = "http://localhost:9092/oauth2callback"
+	scopes       = []string{"files.readwrite.all", "offline_access"}
 	// Khai báo thông tin xác thực OAuth2
 	config = oauth2.Config{
-		ClientID:     "e240abd3-62fa-4378-ae24-9e92f078fc63",
-		ClientSecret: "ZSs8Q~nT6zvm19CIE72shXSp-sHelDFYSsz43cBJ",
-		RedirectURL:  "http://localhost:9092/oauth2callback",
+		ClientID:     clientId,
+		ClientSecret: clientSecret,
+		RedirectURL:  redirectURL,
 		Endpoint: oauth2.Endpoint{
 			AuthURL:  "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
 			TokenURL: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
 		},
-		Scopes: []string{"files.readwrite.all", "offline_access"},
+		Scopes: scopes,
 	}
 	handler *multipart.FileHeader
 )
@@ -121,14 +122,16 @@ func main() {
 		// Sử dụng AccessToken để tải tệp lên OneDrive
 		accessToken := token.AccessToken
 		refreshToken := token.RefreshToken
-		tokenRefresh, err := refreshAccessToken(refreshToken)
+		newAccessToken, err := uploadFile(accessToken, refreshToken)
 		if err != nil {
-			log.Println("err: ", err)
+			log.Fatalf("Failed uploadFile: %v", err)
 		}
-		fmt.Printf("tokenRefresh: %s", tokenRefresh)
-		uploadFile(accessToken)
 		fmt.Fprintln(w, "File uploaded successfully.")
-		getInfoFile(accessToken)
+		if newAccessToken == "" {
+			getInfoFile(accessToken)
+		} else {
+			getInfoFile(newAccessToken)
+		}
 	})
 
 	// Khởi động HTTP server
@@ -137,71 +140,50 @@ func main() {
 	select {}
 }
 
-// /me/drive/items/{item-id}/content
-// me/drive/root:/testhodo/test2.txt:/content
-func uploadFile(accessToken string) {
+func uploadFile(accessToken, refreshToken string) (string, error) {
 	filePath := handler.Filename
 	// Tạo yêu cầu HTTP để tải tệp lên OneDrive
-	uploadURL := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/drive/root:/testhodo/%s:/content", filePath)
+	uploadURL := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/drive/root:/%s:/content", filePath)
 	file, err := os.Open(filePath)
 	if err != nil {
-		log.Fatalf("Failed to open file: %v", err)
+		return "", err
 	}
 	defer file.Close()
 
-	// Kích thước phần nhỏ (ví dụ: 1 MB)
-	chunkSize := 1024 * 1024
-
-	// Tạo yêu cầu HTTP PUT để tải lên tệp
-	req, err := http.NewRequest("PUT", uploadURL, nil)
+	baseReq, err := http.NewRequest("PUT", uploadURL, file)
 	if err != nil {
-		fmt.Println("Failed to create HTTP request:", err)
-		return
+		return "", err
 	}
-	req.Header.Add("Authorization", "Bearer "+accessToken)
+	baseReq.Header.Add("Authorization", "Bearer "+accessToken)
 
-	// Sử dụng HTTP client để gửi yêu cầu
+	// Sử dụng HTTP client để gửi yêu cầu cơ bản
 	client := &http.Client{}
+	resp, err := client.Do(baseReq)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
 
-	// Đọc và gửi từng phần của tệp
-	buffer := make([]byte, chunkSize)
-	for {
-		n, err := file.Read(buffer)
-		if err == io.EOF {
-			break
-		}
+	if resp.StatusCode == http.StatusUnauthorized {
+		newAccessToken, err := uploadFileRefreshToken(filePath, refreshToken)
 		if err != nil {
-			fmt.Println("Failed to read file:", err)
-			return
+			return "", err
 		}
-
-		// Tạo io.Reader từ mảng byte và giới hạn kích thước
-		reader := io.LimitReader(bytes.NewReader(buffer[:n]), int64(n))
-
-		// Gửi phần nhỏ lên OneDrive
-		req.Body = ioutil.NopCloser(reader)
-		req.ContentLength = int64(n)
-
-		resp, err := client.Do(req)
-		if err != nil {
-			fmt.Println("Failed to upload file:", err)
-			return
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			fmt.Printf("Failed to upload file. Status code: %d\n", resp.StatusCode)
-			return
-		}
+		return newAccessToken, nil
 	}
 
-	fmt.Println("File uploaded successfully.")
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		err = fmt.Errorf("failed to upload file. Status code: %v", resp.StatusCode)
+		return "", err
+	}
+
+	return "", nil
 }
 
 func getInfoFile(accessToken string) {
 	filePath := handler.Filename
 	// Tạo yêu cầu HTTP để tải tệp lên OneDrive
-	url := "https://graph.microsoft.com/v1.0/me/drive/root:/testhodo/" + filePath
+	url := "https://graph.microsoft.com/v1.0/me/drive/root:/" + filePath
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -274,15 +256,14 @@ func createLink(itemId, accessToken string) {
 	fmt.Println("Share Link:", string(bodys))
 }
 
-func refreshAccessToken(refreshToken string) (string, error) {
+func uploadFileRefreshToken(filePath, refreshToken string) (string, error) {
 	// Tạo yêu cầu HTTP để làm mới AccessToken
 	data := url.Values{}
 	data.Set("grant_type", "refresh_token")
 	data.Set("refresh_token", refreshToken)
-	data.Set("client_id", "e240abd3-62fa-4378-ae24-9e92f078fc63")         // Thay thế bằng Client ID của bạn
-	data.Set("client_secret", "ZSs8Q~nT6zvm19CIE72shXSp-sHelDFYSsz43cBJ") // Thay thế bằng Client Secret của bạn
-	data.Set("scope", "offline_access files.readwrite.all")               // Đảm bảo phạm vi cần được yêu cầu
-
+	data.Set("client_id", clientId)
+	data.Set("client_secret", clientSecret)
+	data.Set("scope", "files.readwrite.all offline_access")
 	req, err := http.NewRequest("POST", "https://login.microsoftonline.com/common/oauth2/v2.0/token", strings.NewReader(data.Encode()))
 	if err != nil {
 		return "", err
@@ -298,16 +279,14 @@ func refreshAccessToken(refreshToken string) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Failed to refresh AccessToken. Status code: %d", resp.StatusCode)
+		return "", fmt.Errorf("failed to refresh AccessToken. Status code: %d", resp.StatusCode)
 	}
 
-	// Đọc phản hồi
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
 	}
 
-	// Phân tích JSON phản hồi để lấy AccessToken mới
 	var tokenResponse map[string]interface{}
 	if err := json.Unmarshal(body, &tokenResponse); err != nil {
 		return "", err
@@ -315,7 +294,39 @@ func refreshAccessToken(refreshToken string) (string, error) {
 
 	accessToken, ok := tokenResponse["access_token"].(string)
 	if !ok {
-		return "", errors.New("Access token not found in response.")
+		return "", errors.New("access token not found in response")
+	}
+
+	_, ok = tokenResponse["refresh_token"].(string)
+	if !ok {
+		return "", errors.New("refresh token not found in response")
+	}
+
+	// Tạo yêu cầu HTTP để tải tệp lên OneDrive
+	uploadURL := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/drive/root:/%s:/content", filePath)
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	baseReqUpload, err := http.NewRequest("PUT", uploadURL, file)
+	if err != nil {
+		return "", err
+	}
+	baseReqUpload.Header.Add("Authorization", "Bearer "+accessToken)
+
+	// Sử dụng HTTP client để gửi yêu cầu cơ bản
+	clientUpload := &http.Client{}
+	respUpload, err := clientUpload.Do(baseReqUpload)
+	if err != nil {
+		return "", err
+	}
+	defer respUpload.Body.Close()
+
+	if respUpload.StatusCode != http.StatusOK && respUpload.StatusCode != http.StatusCreated {
+		err = fmt.Errorf("failed to upload file. Status code: %v", respUpload.StatusCode)
+		return "", err
 	}
 
 	return accessToken, nil
